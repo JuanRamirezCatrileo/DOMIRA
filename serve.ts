@@ -67,3 +67,25 @@ for (let attempt = 1; ; attempt++) {
 }
 
 console.log(`team-site serving on http://${HOST}:${String(PORT)}`);
+
+// Start the in-process scan runtime (job worker + scheduler) inside this server, so
+// the published site performs real scans with no second process. It is a no-op when
+// DATABASE_URL is not configured, when DOMIRA_INPROCESS_WORKER=false (the
+// recommended production setup is `bun run worker` in its own process), or under
+// `bun test`. Errors here never stop the website from serving.
+if (process.env.NODE_ENV !== "test") {
+  try {
+    const { ensureRuntime } = await import("./src/server/queue/runtime");
+    const runtime = ensureRuntime();
+    console.log(
+      runtime.started
+        ? `[domira] scan runtime running in-process as ${String(runtime.workerId)}`
+        : `[domira] scan runtime not started: ${String(runtime.reason)}`
+    );
+  } catch (error) {
+    console.error(
+      "[domira] scan runtime failed to start:",
+      error instanceof Error ? error.message : error
+    );
+  }
+}

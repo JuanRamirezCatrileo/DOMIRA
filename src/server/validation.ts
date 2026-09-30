@@ -77,3 +77,62 @@ export const addMemberSchema = z.object({
 });
 
 export const updateMemberSchema = z.object({ role: orgRoleSchema });
+
+/* -------------------------------------------------------------------------- */
+/* Deliverable 2a — domains, scans and findings                               */
+/* -------------------------------------------------------------------------- */
+
+export const domainFrequencySchema = z.enum(["manual", "hourly", "6h", "daily", "weekly"]);
+export type DomainFrequency = z.infer<typeof domainFrequencySchema>;
+
+export const findFindingStatusSchema = z.enum(["new", "acknowledged", "resolved", "ignored"]);
+export const findingSeveritySchema = z.enum(["info", "low", "medium", "high", "critical"]);
+export const findingCategorySchema = z.enum([
+  "tls",
+  "certificate",
+  "dns",
+  "email",
+  "http",
+  "availability",
+]);
+
+/** Pagination shared by every list endpoint: 1-based page, bounded page size. */
+export const paginationSchema = z.object({
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+  perPage: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+export const createDomainSchema = z.object({
+  hostname: z.string().trim().min(1).max(253),
+  displayName: z.string().trim().min(1).max(120).optional(),
+  authorizationNote: z.string().trim().max(500).optional(),
+  monitoringEnabled: z.boolean().optional(),
+  checkFrequency: domainFrequencySchema.optional(),
+  organizationId: uuidSchema.optional(),
+});
+
+export const updateDomainSchema = z
+  .object({
+    displayName: z.string().trim().min(1).max(120).nullable().optional(),
+    authorizationNote: z.string().trim().max(500).nullable().optional(),
+    monitoringEnabled: z.boolean().optional(),
+    checkFrequency: domainFrequencySchema.optional(),
+    /** pause | resume | archive — the documented lifecycle transitions. */
+    status: z.enum(["paused", "verified", "archived"]).optional(),
+    organizationId: uuidSchema.optional(),
+  })
+  .refine(
+    (value) =>
+      value.displayName !== undefined ||
+      value.authorizationNote !== undefined ||
+      value.monitoringEnabled !== undefined ||
+      value.checkFrequency !== undefined ||
+      value.status !== undefined,
+    { message: "Send at least one field to update." }
+  );
+
+export const updateFindingSchema = z.object({
+  status: findFindingStatusSchema,
+  organizationId: uuidSchema.optional(),
+});
+

@@ -22,7 +22,17 @@ export type AuditAction =
   | "organization.updated"
   | "membership.added"
   | "membership.role_changed"
-  | "membership.removed";
+  | "membership.removed"
+  // Deliverable 2a — domain management, verification gate, scans and findings.
+  | "domain.created"
+  | "domain.updated"
+  | "domain.deleted"
+  | "domain.verification_started"
+  | "domain.verified"
+  | "domain.verification_failed"
+  | "scan.requested"
+  | "scan.cancelled"
+  | "finding.status_changed";
 
 export interface AuditEntry {
   action: AuditAction;

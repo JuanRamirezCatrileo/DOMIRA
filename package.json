@@ -13,7 +13,9 @@
     "migrate": "bun run scripts/migrate.ts",
     "promote-super-admin": "bun run scripts/promote-super-admin.ts",
     "test": "bun test tests/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "worker": "bun run scripts/worker.ts",
+    "scheduler": "bun run scripts/scheduler.ts"
   },
   "dependencies": {
     "@tanstack/react-router": "^1.158.1",

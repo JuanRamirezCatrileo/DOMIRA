@@ -12,7 +12,7 @@
 import { DatabaseNotConfiguredError } from "~/db";
 import { ApiError, errors, isApiError } from "~/server/http/errors";
 import { clientIp, jsonResponse, userAgent, withSecurityHeaders } from "~/server/http/http";
-import { handleAdminAudit, handleAdminOutbox, handleAlertsNotImplemented, handleCertificatesNotImplemented, handleDomainVerificationNotImplemented, handleDomainsNotImplemented, handleFindingsNotImplemented, handleReportsNotImplemented, handleScansNotImplemented } from "./admin-handlers";
+import { handleAdminAudit, handleAdminOutbox, handleAlertsNotImplemented, handleReportsNotImplemented } from "./admin-handlers";
 import {
   handleForgotPassword,
   handleLogin,
@@ -32,6 +32,20 @@ import {
   handleRenameOrganization,
   handleUpdateMember,
 } from "./organization-handlers";
+import {
+  handleCreateDomain,
+  handleDeleteDomain,
+  handleDomainSecurity,
+  handleGetDomain,
+  handleListDomainScans,
+  handleListDomains,
+  handleRequestDomainScan,
+  handleUpdateDomain,
+  handleVerifyDomain,
+} from "./domain-handlers";
+import { handleListCertificates, handleListFindings, handleUpdateFinding } from "./finding-handlers";
+import { handleCancelScan, handleGetScan, handleListScans } from "./scan-handlers";
+import { ensureRuntime } from "~/server/queue/runtime";
 import type { ApiRoute, ApiRouteContext } from "./types";
 
 export const API_ROUTES: ApiRoute[] = [
@@ -154,56 +168,113 @@ export const API_ROUTES: ApiRoute[] = [
     implemented: true,
     handler: handleAdminAudit,
   },
-  // ---- Declared but NOT implemented (answer 501, never fake data) -------------
+  // ---- Deliverable 2a: domains, the ownership gate and scanning ---------------
   {
     method: "GET",
     path: "/api/domains",
-    summary: "List monitored domains — deliverable 2.",
-    implemented: false,
-    handler: handleDomainsNotImplemented,
+    summary: "List the organisation's monitored domains (paginated, filter by status).",
+    implemented: true,
+    handler: handleListDomains,
   },
   {
     method: "POST",
     path: "/api/domains",
-    summary: "Add a domain — deliverable 2.",
-    implemented: false,
-    handler: handleDomainsNotImplemented,
+    summary: "Add an authorised domain and get the exact DNS TXT record to publish.",
+    implemented: true,
+    handler: handleCreateDomain,
+  },
+  {
+    method: "GET",
+    path: "/api/domains/:id",
+    summary: "One domain: state, verification record, latest scan and score.",
+    implemented: true,
+    handler: handleGetDomain,
+  },
+  {
+    method: "PATCH",
+    path: "/api/domains/:id",
+    summary: "Rename, change frequency, pause/resume or archive a domain.",
+    implemented: true,
+    handler: handleUpdateDomain,
+  },
+  {
+    method: "DELETE",
+    path: "/api/domains/:id",
+    summary: "Remove a domain from monitoring (soft delete; history is kept).",
+    implemented: true,
+    handler: handleDeleteDomain,
   },
   {
     method: "POST",
     path: "/api/domains/:id/verify",
-    summary: "Verify domain ownership — deliverable 2.",
-    implemented: false,
-    handler: handleDomainVerificationNotImplemented,
+    summary: "Check the published DNS TXT record (real lookup) and verify ownership.",
+    implemented: true,
+    handler: handleVerifyDomain,
+  },
+  {
+    method: "POST",
+    path: "/api/domains/:id/scan",
+    summary: "Queue a scan for a verified domain; answers 202 with the scan and job ids.",
+    implemented: true,
+    handler: handleRequestDomainScan,
+  },
+  {
+    method: "GET",
+    path: "/api/domains/:id/scans",
+    summary: "Scan history for one domain, newest first.",
+    implemented: true,
+    handler: handleListDomainScans,
+  },
+  {
+    method: "GET",
+    path: "/api/domains/:id/security",
+    summary: "Security Score with per-category breakdown and history (uncollected categories are explicit).",
+    implemented: true,
+    handler: handleDomainSecurity,
   },
   {
     method: "GET",
     path: "/api/scans",
-    summary: "List scans — deliverable 2.",
-    implemented: false,
-    handler: handleScansNotImplemented,
+    summary: "The organisation's scans, filterable by domain and status.",
+    implemented: true,
+    handler: handleListScans,
+  },
+  {
+    method: "GET",
+    path: "/api/scans/:id",
+    summary: "One scan with its per-check status, errors and findings.",
+    implemented: true,
+    handler: handleGetScan,
   },
   {
     method: "POST",
-    path: "/api/scans",
-    summary: "Queue a scan — deliverable 2.",
-    implemented: false,
-    handler: handleScansNotImplemented,
+    path: "/api/scans/:id/cancel",
+    summary: "Cancel a queued or running scan.",
+    implemented: true,
+    handler: handleCancelScan,
   },
   {
     method: "GET",
     path: "/api/findings",
-    summary: "List findings — deliverable 2.",
-    implemented: false,
-    handler: handleFindingsNotImplemented,
+    summary: "Findings, filterable by severity, category, status and domain.",
+    implemented: true,
+    handler: handleListFindings,
+  },
+  {
+    method: "PATCH",
+    path: "/api/findings/:id",
+    summary: "Change a finding's status (new / acknowledged / resolved / ignored).",
+    implemented: true,
+    handler: handleUpdateFinding,
   },
   {
     method: "GET",
     path: "/api/certificates",
-    summary: "Certificate inventory — deliverable 2.",
-    implemented: false,
-    handler: handleCertificatesNotImplemented,
+    summary: "Certificate inventory: newest observation per domain, expiring first.",
+    implemented: true,
+    handler: handleListCertificates,
   },
+  // ---- Declared but NOT implemented (answer 501, never fake data) -------------
   {
     method: "GET",
     path: "/api/alerts",
@@ -289,6 +360,10 @@ async function dispatch(request: Request, pathname: string): Promise<Response> {
 
 /** Entry point used by every src/routes/api/** route file and by the test suite. */
 export async function dispatchApi(request: Request): Promise<Response> {
+  // Start the in-process scan runtime (worker + scheduler) on the first request, so
+  // the published site scans without a second process. A no-op while it runs, under
+  // `bun test`, or before DATABASE_URL is configured. serve.ts also starts it at boot.
+  ensureRuntime();
   let pathname = "/api";
   try {
     pathname = new URL(request.url).pathname;

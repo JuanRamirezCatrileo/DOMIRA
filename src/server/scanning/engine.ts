@@ -27,7 +27,7 @@ import {
   tlsTimeoutMs,
 } from "~/server/env";
 
-import { probeAvailability } from "./availability";
+import type { AvailabilityProbeResult } from "./availability";
 import {
   DNS_RECORD_TYPES,
   findNonPublicAddresses,
@@ -37,8 +37,9 @@ import {
 } from "./dns";
 import { detectFindings, recordFindings, type DnsSnapshot, type ScanInputs } from "./findings";
 import { loadActiveMethodology, type MethodologyConfig } from "./methodology";
-import { computeSecurityScore, type ScoreInput, type ScoreResult } from "./score";
-import { probeTls, type TlsProbeResult } from "./tls";
+import { getAvailabilityProbe, getTlsProbe } from "./probes";
+import { computeSecurityScore, type ScoreInput } from "./score";
+import type { TlsProbeResult } from "./tls";
 
 export interface DomainRow {
   id: string;
@@ -108,6 +109,11 @@ const FREQUENCY_INTERVALS: Record<string, string> = {
   daily: "1 day",
   weekly: "7 days",
 };
+
+/** The PostgreSQL interval for a monitoring frequency, or null for 'manual'. */
+export function frequencyInterval(frequency: string): string | null {
+  return FREQUENCY_INTERVALS[frequency] ?? null;
+}
 
 export function nextScanExpression(frequency: string): string | null {
   const interval = FREQUENCY_INTERVALS[frequency];
@@ -212,9 +218,7 @@ function checkStatusDns(snapshot: DnsSnapshot): string {
   return hasA ? "ok" : "warning";
 }
 
-function checkStatusAvailability(
-  availability: Awaited<ReturnType<typeof probeAvailability>> | null
-): string {
+function checkStatusAvailability(availability: AvailabilityProbeResult | null): string {
   if (!availability) return "error";
   if (!availability.ok) return "critical";
   const status = availability.statusCode ?? 0;
@@ -334,11 +338,11 @@ export async function executeScan(scanId: string, workerId: string): Promise<Sca
         : null;
 
     let tls: TlsProbeResult | null = null;
-    let availability: Awaited<ReturnType<typeof probeAvailability>> | null = null;
+    let availability: AvailabilityProbeResult | null = null;
     if (!refusal) {
       const [tlsOutcome, availabilityOutcome] = await Promise.allSettled([
-        probeTls(hostname, { timeoutMs: tlsTimeoutMs() }),
-        probeAvailability(hostname, {
+        getTlsProbe()(hostname, { timeoutMs: tlsTimeoutMs() }),
+        getAvailabilityProbe()(hostname, {
           timeoutMs: httpTimeoutMs(),
           maxRedirects: httpMaxRedirects(),
           userAgent: scannerUserAgent(),
