@@ -14,6 +14,7 @@
     "promote-super-admin": "bun run scripts/promote-super-admin.ts",
     "test": "bun test tests/",
     "typecheck": "tsc --noEmit",
+    "verify:real-scan": "bun run scripts/verify-real-scan.ts",
     "worker": "bun run scripts/worker.ts",
     "scheduler": "bun run scripts/scheduler.ts"
   },

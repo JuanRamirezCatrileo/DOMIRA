@@ -664,7 +664,7 @@ export async function executeScan(scanId: string, workerId: string): Promise<Sca
                 consecutive_failures = 0,
                 status = case when status = 'error' then 'verified' else status end,
                 updated_at = now()
-          where id = $1`,
+          where id = $1 and organization_id = $2`,
         [scan.domain_id, scan.organization_id, nextScan]
       );
 
@@ -695,6 +695,9 @@ export async function executeScan(scanId: string, workerId: string): Promise<Sca
       findings: persisted.findings,
     };
   } catch (error) {
+    if (process.env.DOMIRA_SCAN_DEBUG) {
+      console.error("[domira] scan failure stack:", (error as Error).stack);
+    }
     const message = `${(error as { code?: string }).code ?? "SCAN_ERROR"}: ${(error as Error).message}`;
     await failScan(scanId, scan.domain_id, message);
     return { scanId, status: "failed", error: message, score: null, checksFailed: 0, findings: { opened: 0, updated: 0 } };

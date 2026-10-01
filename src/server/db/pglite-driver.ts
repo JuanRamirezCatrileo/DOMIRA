@@ -19,11 +19,18 @@ function fromPgliteLike(client: PgliteLike, label: string): QueryRunner {
   const runner: QueryRunner = {
     async query<T = Row>(text: string, params?: readonly unknown[]): Promise<QueryResult<T>> {
       if (params && params.length > 0) {
-        const result = await client.query<T>(text, [...params]);
-        return {
-          rows: result.rows ?? [],
-          rowCount: result.affectedRows || (result.rows ?? []).length,
-        };
+        try {
+          const result = await client.query<T>(text, [...params]);
+          return {
+            rows: result.rows ?? [],
+            rowCount: result.affectedRows || (result.rows ?? []).length,
+          };
+        } catch (error) {
+          if (process.env.DOMIRA_SCAN_DEBUG) {
+            console.error("[domira] pglite SQL failure:", text, "\nparams:", JSON.stringify(params));
+          }
+          throw error;
+        }
       }
       // No parameters: use the simple-query protocol so a multi-statement script
       // (a whole migration file) runs as one unit, exactly like postgres.js does.
