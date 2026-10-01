@@ -7,6 +7,13 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { query } from "~/db";
+import {
+  HostnameRejectedError,
+  assertValidHostname,
+  publicSuffix,
+  registeredDomain,
+  validateHostname,
+} from "~/server/api/domain-validation";
 import { ApiClient, registerUser, scalar, uniqueEmail } from "./helpers/harness";
 import {
   HEALTHY_RECORDS,
@@ -76,6 +83,73 @@ describe("hostname validation (SSRF first filter)", () => {
     expect(response.body.verification.recordType).toBe("TXT");
     expect(response.body.verification.recordValue).toMatch(/^domira-site-verification=/);
     expect(response.body.verification.expiresAt).toBeTruthy();
+  });
+
+  /**
+   * REGRESSION (deliverable 2a): the "public suffix only" check compared the
+   * hostname against the REGISTERED domain instead of the public suffix, so the
+   * slice after the registered domain was always empty and every bare registrable
+   * domain (`example.com`) was rejected — the single most common input of the whole
+   * product. Subdomains passed only by accident. These cases pin the behaviour.
+   */
+  test("accepts a bare registrable domain for every supported suffix shape", async () => {
+    const cases: Array<[input: string, normalized: string, registered: string]> = [
+      ["example.com", "example.com", "example.com"],
+      ["domira-demo.cl", "domira-demo.cl", "domira-demo.cl"],
+      ["something.co.uk", "something.co.uk", "something.co.uk"],
+      ["algo.com.ar", "algo.com.ar", "algo.com.ar"],
+    ];
+
+    for (const [input, normalized, registered] of cases) {
+      const validation = validateHostname(input);
+      expect(validation).toMatchObject({ ok: true, hostname: normalized });
+      // The suffix is never the hostname, and the registered domain is the hostname.
+      expect(publicSuffix(normalized)).not.toBe(normalized);
+      expect(registeredDomain(normalized)).toBe(registered);
+    }
+
+    // ...and the same four names are accepted by the real endpoint.
+    for (const [input, normalized, registered] of cases) {
+      const response = await owner.client.post("/api/domains", { hostname: input, organizationId });
+      expect(response.status).toBe(201);
+      expect(response.body.domain.hostname).toBe(normalized);
+      expect(response.body.domain.registeredDomain).toBe(registered);
+      expect(response.body.verification.recordName).toBe(`_domira-verification.${normalized}`);
+    }
+  });
+
+  test("accepts a subdomain and reports the registrable name, never the public suffix", async () => {
+    expect(validateHostname("sub.example.com")).toMatchObject({ ok: true, hostname: "sub.example.com" });
+    expect(publicSuffix("sub.example.com")).toBe("com");
+    expect(registeredDomain("sub.example.com")).toBe("example.com");
+
+    // foo.co.uk is a registrable domain: its registered domain is itself, not co.uk.
+    expect(publicSuffix("foo.co.uk")).toBe("co.uk");
+    expect(registeredDomain("foo.co.uk")).toBe("foo.co.uk");
+    expect(registeredDomain("a.b.co.uk")).toBe("b.co.uk");
+
+    const response = await owner.client.post("/api/domains", { hostname: "sub.example.com", organizationId });
+    expect(response.status).toBe(201);
+    expect(response.body.domain.registeredDomain).toBe("example.com");
+  });
+
+  test("rejects a public suffix used as the whole domain with code public_suffix_only", async () => {
+    for (const suffix of ["com", "co.uk"]) {
+      const validation = validateHostname(suffix);
+      expect(validation.ok).toBe(false);
+      expect(validation.code).toBe("public_suffix_only");
+      expect(validation.message).toContain("public suffix");
+      // A public suffix has no registrable domain either.
+      expect(registeredDomain(suffix)).toBeNull();
+
+      expect(() => assertValidHostname(suffix)).toThrow(HostnameRejectedError);
+
+      const response = await owner.client.post("/api/domains", { hostname: suffix, organizationId });
+      expect(response.status).toBe(400);
+      expect(response.body.error.code).toBe("VALIDATION_ERROR");
+      expect(String(response.body.error.details?.hostname)).toContain("public suffix");
+      expect(await scalar<number>("select count(*)::int from domains where hostname = $1", [suffix])).toBe(0);
+    }
   });
 
   test("rejects a duplicate domain inside the same organisation with 409", async () => {

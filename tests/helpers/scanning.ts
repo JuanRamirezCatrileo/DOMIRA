@@ -11,7 +11,8 @@
  *
  * The application code is never mocked: the real engine runs, the real SQL is
  * executed, only the network edge is supplied by the test. The real probes against a
- * real public domain are exercised by `bun run scripts/verify-example-com.ts`.
+ * real public domain are exercised by `bun run verify:real-scan`
+ * (scripts/verify-real-scan.ts) — see docs/scanning.md, "Real run evidence".
  */
 import { setDnsResolver, type DnsAnswer, type DnsRecordType, type DnsResolver } from "~/server/scanning/dns";
 import { setAvailabilityProbe, setTlsProbe } from "~/server/scanning/probes";

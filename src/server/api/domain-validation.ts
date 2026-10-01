@@ -162,6 +162,18 @@ function looksLikeIpLiteral(value: string): boolean {
   return false;
 }
 
+/**
+ * The rejection used when the input IS a public suffix (with or without further
+ * labels below it): there is no registrable name and therefore nothing to monitor.
+ */
+function publicSuffixOnly(hostname: string): HostnameValidationResult {
+  return {
+    ok: false,
+    code: "public_suffix_only",
+    message: `"${hostname}" is a public suffix, not a registerable domain. Add the name you actually own, for example "example.${hostname}".`,
+  };
+}
+
 export function validateHostname(input: string): HostnameValidationResult {
   const raw = String(input ?? "").trim();
   if (raw.length === 0) {
@@ -218,6 +230,12 @@ export function validateHostname(input: string): HostnameValidationResult {
 
   const labels = hostname.split(".");
   if (labels.length < 2) {
+    // A single label is either a public suffix typed on its own (`com`, which is a
+    // real suffix and therefore a public_suffix_only rejection) or not a domain name
+    // at all (`notadomain`, `localhost`).
+    if (hostname === publicSuffix(hostname)) {
+      return publicSuffixOnly(hostname);
+    }
     return {
       ok: false,
       code: "single_label",
@@ -242,17 +260,23 @@ export function validateHostname(input: string): HostnameValidationResult {
     };
   }
 
-  const registered = registeredDomain(hostname);
-  for (const suffix of RESERVED_SUFFIXES) {
-    if (hostname === suffix || hostname.endsWith(`.${suffix}`)) {
+  for (const reserved of RESERVED_SUFFIXES) {
+    if (hostname === reserved || hostname.endsWith(`.${reserved}`)) {
       return {
         ok: false,
         code: "reserved_suffix",
-        message: `".${suffix}" is a reserved, non-public namespace and cannot be monitored.`,
+        message: `".${reserved}" is a reserved, non-public namespace and cannot be monitored.`,
       };
     }
   }
-  if (registered === null) {
+  // Compare the hostname with the matched PUBLIC SUFFIX (the multi-label suffix when
+  // one matches, else the last label) — never with the registered domain. `com` and
+  // `co.uk` used as a whole domain are public suffixes: there is nothing to register
+  // and nothing to monitor, so they are rejected. Before this, the check compared the
+  // hostname against the registered domain and therefore also rejected every bare
+  // registrable domain (`example.com`), which is the single most common input.
+  const suffix = publicSuffix(hostname);
+  if (suffix === null) {
     return {
       ok: false,
       code: "unsupported_suffix",
@@ -260,14 +284,10 @@ export function validateHostname(input: string): HostnameValidationResult {
         "That domain's top-level suffix is not supported yet. Contact us if you need it monitored.",
     };
   }
-  const tld = hostname.slice(registered.length + 1);
-  if (tld.length === 0) {
-    return {
-      ok: false,
-      code: "public_suffix_only",
-      message: `"${hostname}" is a public suffix, not a registerable domain.`,
-    };
+  if (hostname === suffix) {
+    return publicSuffixOnly(hostname);
   }
+  const registered = registeredDomain(hostname)!;
 
   const platform = platformHostnames();
   if (platform.includes(hostname) || platform.includes(registered)) {
@@ -282,22 +302,37 @@ export function validateHostname(input: string): HostnameValidationResult {
 }
 
 /**
- * Returns the registered domain (e.g. `example.com`, `foo.com.ar`) for a hostname
- * whose suffix is supported, or null when the suffix is unknown.
+ * The public suffix of a hostname: the matched multi-label suffix when one applies
+ * (`co.uk` for `foo.co.uk`), else the single last label (`com` for `example.com`).
+ * Returns null when the suffix is not in the supported table.
+ *
+ * This — not the registered domain — is what tells "a domain I own" apart from
+ * "a public suffix typed as the whole domain".
  */
-export function registeredDomain(hostname: string): string | null {
+export function publicSuffix(hostname: string): string | null {
   const labels = hostname.split(".");
   for (const suffix of ALLOWED_MULTI_LABEL_SUFFIXES) {
-    const suffixLabels = suffix.split(".");
-    if (labels.length > suffixLabels.length && labels.slice(-suffixLabels.length).join(".") === suffix) {
-      return labels.slice(-(suffixLabels.length + 1)).join(".");
+    const suffixLength = suffix.split(".").length;
+    if (labels.length >= suffixLength && labels.slice(-suffixLength).join(".") === suffix) {
+      return suffix;
     }
   }
   const last = labels[labels.length - 1]!;
-  if ((ALLOWED_SUFFIXES as readonly string[]).includes(last)) {
-    return labels.slice(-2).join(".");
-  }
-  return null;
+  return (ALLOWED_SUFFIXES as readonly string[]).includes(last) ? last : null;
+}
+
+/**
+ * Returns the registered domain (e.g. `example.com`, `foo.com.ar`) for a hostname
+ * whose suffix is supported, or null when the suffix is unknown OR when the hostname
+ * is itself the public suffix (there is no registrable name in that case).
+ */
+export function registeredDomain(hostname: string): string | null {
+  const labels = hostname.split(".");
+  const suffix = publicSuffix(hostname);
+  if (suffix === null) return null;
+  const suffixLength = suffix.split(".").length;
+  if (labels.length <= suffixLength) return null;
+  return labels.slice(-(suffixLength + 1)).join(".");
 }
 
 /** Throws HostnameRejectedError when the hostname may not be registered. */
